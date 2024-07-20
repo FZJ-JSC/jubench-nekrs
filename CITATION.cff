@@ -26,7 +26,7 @@ authors:
 abstract: "The nekRS benchmark of the JUPITER Benchmark Suite"
 identifiers:
   - type: doi
-    value: 10.5281/zenodo.12737559
+    value: 10.5281/zenodo.12788254
     description: Version-agnostic Zenodo Identifier
 repository-code: 'https://github.com/FZJ-JSC/jubench-nekrs/'
 license: MIT
