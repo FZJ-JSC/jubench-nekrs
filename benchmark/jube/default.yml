@@ -1,0 +1,171 @@
+name: nekRS Benchmark
+outpath: run
+comment: Runs the mesoscale convection case after building nekRS and genbox
+
+
+# Run -----------------------------------------------------------------------------------------------------------------
+
+parameterset:
+  # Global Parameters for all Runs
+  - name: globalParameter
+    parameter:
+    - name: modules
+      _: |
+        module purge
+        module load Stages/2022 GCC/11.2.0 CMake/3.21.1 OpenMPI/4.1.2 CUDA/11.5
+        module list
+    - name: source_dir
+      _: $jube_benchmark_home/../../src
+    - name: NEKRS_HOME
+      _: "$(pwd)/build-nekrs/bin"
+      export: true
+    - name: OCCA_CXX
+      _: g++
+      export: true
+    - name: OCCA_CXXFLAGS
+      _: -O2 -ftree-vectorize -funroll-loops -march=native -mtune=native
+      export: true
+    - name: NEKRS_GPU_MPI
+      _: 1
+      export: true
+    
+  # Parameters used for executing the jobs (i.e. SLURM)
+  - name: systemParameter
+    init_with: platform.xml
+    parameter:
+      # Node counts for different runs
+      - name: nodes
+        _: 8
+      - name: nodes
+        tag: scaling
+        _: "1,2,4,6,8"
+      - name: nodes
+        tag: large_scaling
+        _: "64,128,256,384"
+      - name: nodes
+        tag: high_large|high_medium|high_small
+        _: 642
+      
+      # .box filename
+      - name: box_file
+        _: baseline.box
+      - name: box_file
+        tag: scaling
+        _: scaling.box
+      - name: box_file
+        tag: large_scaling
+        _: large_scaling.box
+      - name: box_file
+        tag: high_large
+        _: high_large.box
+      - name: box_file
+        tag: high_medium
+        _: high_medium.box
+      - name: box_file
+        tag: high_small
+        _: high_small.box
+      
+      - name: taskspernode
+        _: 4
+      - name: threadspertask
+        _: 12
+      - name: queue
+        _: booster
+      - name: queue
+        tag: high_large|high_medium|high_small
+        _: largebooster
+      - name: account
+        _: jscbenchmark
+      - name: gres
+        _: "gpu:4"
+      - name: timelimit
+        _: "00:55:00"
+      - name: additional_job_config
+        _: >
+          #SBATCH --distribution=block:block:fcyclic
+          #SBATCH --hint=nomultithread
+      - name: preprocess
+        _: |
+          $modules
+          export PATH=$NEKRS_HOME/bin:$$PATH
+          export SRUN_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK}
+      - name: executable
+        _: $NEKRS_HOME/bin/nekrs
+      - name: args_exec
+        _: --backend CUDA --device-id 0 --setup rbc
+
+fileset:
+  - name: genboxFiles
+    copy: $source_dir/genbox/*
+  - name: caseFiles
+    copy: $source_dir/mesoscale/*
+  - name: boxFile
+    copy: $source_dir/grids/$box_file
+
+step:
+  # Build nekRS
+  - name: build-nekrs
+    use: [globalParameter]
+    do:
+      - $modules
+      - |
+        cmake -Wno-dev -Wfatal-errors \
+         -DCMAKE_INSTALL_PREFIX="./bin" \
+         -DCMAKE_Fortran_COMPILER="mpif77" \
+         -DCMAKE_C_COMPILER="mpicc" \
+         -DCMAKE_CXX_COMPILER="mpic++" \
+         -DOCCA_CXX="$OCCA_CXX" \
+         -DOCCA_CXXFLAGS="$OCCA_CXXFLAGS" \
+         $source_dir/nekRS
+      - cmake --build . --target install -j8
+      
+  # Build the genbox tool from the nek5000 tools    
+  - name: build-genbox
+    use: [globalParameter, genboxFiles]
+    do:
+      - $modules
+      - make
+  
+  # Run the benchmark
+  - name: execute
+    depend: build-nekrs, build-genbox
+    use:
+      - globalParameter
+      - systemParameter
+      - caseFiles    # Copy Case Files
+      - boxFile      # Copy .box file
+      - {from: platform.xml, _: executeset}
+      - {from: platform.xml, _: jobfiles}    # Copy submit.job.in
+      - {from: platform.xml, _: executesub}  # Replace Values in submit.job.in
+    do:
+      done_file: $done_file
+      _: echo $box_file | build-genbox/genbox && mv box.re2 rbc.re2 && $submit $submit_script
+
+
+
+# Analyse -------------------------------------------------------------------------------------------------------------
+
+patternset: 
+  name: rbc-patterns
+  pattern:
+    - name: total_solve_time
+      type: float
+      _: "total solve time:\\s*$jube_pat_fp"
+    - name: verification_status
+      type: string
+      _: "Verification:\\s*(.*)$"
+
+analyser:
+  name: analyse-mesoscale
+  use: rbc-patterns
+  analyse:
+    step: execute
+    file: job.out
+
+result:
+  use: analyse-mesoscale
+  table:
+    name: result
+    style: pretty
+    sort: nodes
+    column: [nodes, total_solve_time, verification_status]

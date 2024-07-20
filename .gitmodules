@@ -1,0 +1,4 @@
+[submodule "src/nekRS"]
+	path = src/nekRS
+	url = https://github.com/Nek5000/nekRS
+	branch = next

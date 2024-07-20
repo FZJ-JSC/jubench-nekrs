@@ -1,0 +1,201 @@
+//
+// nekRS User Defined File
+//
+#include <math.h>
+#include "udf.hpp"
+
+static occa::kernel fillFUKernel; 
+static occa::kernel avgValueKernel;
+static occa::kernel varValueKernel;
+
+void userf(nrs_t *nrs, dfloat time, occa::memory o_U, occa::memory o_FU)
+{
+  mesh_t* mesh = nrs->meshV;
+  fillFUKernel(mesh->Nlocal, nrs->fieldOffset, nrs->cds->o_S, nrs->o_FU);
+}
+
+void UDF_LoadKernels(occa::properties& kernelInfo)
+{
+  fillFUKernel = oudfBuildKernel(kernelInfo, "fillFU");
+  
+  avgValueKernel = oudfBuildKernel(kernelInfo, "avgValue");
+  varValueKernel = oudfBuildKernel(kernelInfo, "varValue");
+}
+
+void UDF_Setup(nrs_t *nrs)
+{
+  // assign function pointer to drive flow by constant mean pressure gradient
+  udf.uEqnSource = &userf;
+}
+
+
+
+
+
+dfloat average(nrs_t *nrs, dfloat time)
+{
+  mesh_t* mesh = nrs->meshV;
+  
+  static occa::memory o_res;
+  static dfloat *res;
+  
+  
+  int NFields = 3;
+  int N = mesh->Nlocal;
+  int Nblock = (N + BLOCKSIZE - 1) / BLOCKSIZE;
+  int res_length = Nblock*NFields;
+  
+  if (!o_res.isInitialized()) {
+    
+    o_res = platform->device.malloc(res_length * sizeof(dfloat));
+    res = (dfloat *) calloc(res_length, sizeof(dfloat));
+  }
+  
+  avgValueKernel(Nblock, N, mesh->o_x, mesh->o_y, mesh->o_z, nrs->fieldOffset, nrs->cds->o_U, nrs->cds->o_S, o_res);
+  o_res.copyTo(res, res_length * sizeof(dfloat));
+  
+  
+  dfloat sum[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+  
+  for(int i=0; i< Nblock; i++){
+    sum[0] += res[0*Nblock +i];
+    sum[1] += res[1*Nblock +i];
+    sum[2] += res[2*Nblock +i];
+  }
+  
+
+  sum[2] = (mesh->Nlocal);
+  
+  if (platform->comm.mpiComm != MPI_COMM_NULL){
+    MPI_Allreduce(MPI_IN_PLACE, &sum, 3, MPI_DFLOAT, MPI_SUM, platform->comm.mpiComm);
+    }
+  
+  dfloat inverse = 1/sum[2];
+  sum[0] = sum[0] * inverse;
+  sum[1] = sum[1] * inverse;
+  
+  varValueKernel(Nblock, N, mesh->o_x, mesh->o_y, mesh->o_z, nrs->fieldOffset, nrs->cds->o_U, nrs->cds->o_S, o_res, sum[0], sum[1]);
+  o_res.copyTo(res, res_length * sizeof(dfloat));
+  
+  for(int i=0; i< Nblock; i++){
+    sum[3] += res[0*Nblock +i];
+    sum[4] += res[1*Nblock +i];
+  }
+  
+  
+  if (platform->comm.mpiComm != MPI_COMM_NULL){
+    //if(platform->comm.mpiRank == 0){
+      MPI_Allreduce(MPI_IN_PLACE, &sum[3], 2, MPI_DFLOAT, MPI_SUM, platform->comm.mpiComm);
+      //}
+    //else{
+      //MPI_Reduce(&sum, &sum[3], 2, MPI_DFLOAT, MPI_SUM, 0, platform->comm.mpiComm);
+    //}
+    }
+  
+  sum[3] = sum[3] * inverse;
+  sum[4] = sum[4] * inverse;
+  
+  return sum[1];
+  
+  
+}
+
+void verification(nrs_t *nrs, dfloat time, int tstep)
+{
+  const int verification_step = 600;
+  const int num_values = verification_step;
+  const double min_vz = 1e-12, max_vz = 1e-5;
+
+  static dfloat *temp_values;
+  
+  if (tstep == 0 && platform->comm.mpiRank == 0){
+    temp_values = (dfloat *) calloc(num_values, sizeof(dfloat));
+  }
+  
+  
+  if (tstep != 0 && tstep <= verification_step){
+    dfloat v_z = average(nrs, time);
+    if (platform->comm.mpiRank == 0){
+      temp_values[tstep-1] = v_z;
+    }
+  }
+  
+  
+  if (tstep == verification_step && platform->comm.mpiRank == 0){
+    printf("\nStarting verification!\n");
+    
+    printf("\tWriting Caculated data to file vz.csv\n\n");
+    FILE *output_temp;
+    output_temp = fopen("vz.csv","w");
+    
+    fprintf(output_temp, "abs(v_z)\n");
+    for (int i=0; i<num_values; i++){
+      fprintf(output_temp, "%g\n", temp_values[i]);
+    }
+    
+    printf("\tFinding max and min domain average |v_z|\n");
+    dfloat min_speed=1e100, max_speed=0.0;
+    for (int i=0; i<num_values; i++){
+      if (temp_values[i] > max_speed){
+        max_speed = temp_values[i];
+      }
+      else if (temp_values[i] < min_speed){
+        min_speed = temp_values[i];
+      }
+    }
+    
+    printf("\tVerify\n");
+    if (max_speed > max_vz || min_speed < min_vz)
+    {
+      printf("\t\tVerification:\t\tWarning: check result for verification\n");
+    }
+    else
+    {
+      printf("\t\tVerification:\t\tPassed\n");
+    }
+    
+    printf("\t\taverage v_z between:\t\t[%g, %g]\n\n", min_speed, max_speed);    
+    
+  }
+}
+
+
+
+void UDF_ExecuteStep(nrs_t *nrs, dfloat time, int tstep)
+{
+  static FILE *output;
+  static double step_sum;
+  
+  if (!output) {
+    output = fopen("timings.csv","w");
+    fprintf(output, "time,t_step\n");
+    step_sum = 0.0;
+  }
+  
+  if (tstep != 0){
+    platform->timer.toc("Step");
+    const double steptime = platform->timer.query("Step", "DEVICE:MAX");
+  
+    if(platform->comm.mpiRank == 0) {
+      fprintf(output, "%g,%g\n",time, steptime);
+      step_sum += steptime;
+    }
+  }
+  
+  platform->timer.reset("Step");
+  platform->flopCounter->clear();
+
+
+  verification(nrs, time, tstep);
+  if (tstep == 600 && platform->comm.mpiRank == 0){
+    printf("\ttotal solve time:\t %g s\n", step_sum);
+  }
+
+
+  if (nrs->isOutputStep) {
+    nek::ocopyToNek(time, tstep);
+    nek::userchk();
+  }
+  
+  platform->timer.tic("Step", 1);
+}

@@ -1,0 +1,29 @@
+[GENERAL] 
+polynomialOrder = 9
+#startFrom = "restart.fld"
+stopAt = endTime
+endTime = 3
+
+dt = targetCFL=4.0+max=0.005
+timeStepper = tombo2 
+subCyclingSteps = 2
+
+writeControl = steps
+writeInterval = -1
+
+regularization = hpfrt + nModes = 1 + scalingCoeff = 15
+
+[PRESSURE]
+residualTol = 1e-04
+
+[VELOCITY]
+boundaryTypeMap = wall
+density = 1.0
+viscosity = sqrt(7/1e5) # sqrt(PRA/RA) 
+residualTol = 1e-06
+
+[TEMPERATURE]
+boundaryTypeMap = inlet, outlet
+conductivity = 1/sqrt(1e5*7) # 1/sqrt(RA*PRA)
+rhoCp = 1.0
+residualTol = 1e-06

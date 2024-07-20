@@ -1,0 +1,31 @@
+#!/bin/bash -x
+#SBATCH --job-name="nekRS Benchmark"
+#SBATCH --time=00:55:00
+#SBATCH --output=job.out
+#SBATCH --error=job.err
+#SBATCH --distribution=block:block:fcyclic
+#SBATCH --hint=nomultithread
+
+#SBATCH --nodes=8
+#SBATCH --ntasks=4
+#SBATCH --cpus-per-task=12
+#SBATCH --gres=gpu:4
+#SBATCH --partition=booster
+
+
+# Load the required modules here
+module purge
+module load Stages/2022 GCC/11.2.0 CMake/3.21.1 OpenMPI/4.1.2 CUDA/11.5
+module list
+
+export NEKRS_HOME=$HOME/.local/nekrs
+export PATH=$NEKRS_HOME/nekrs/bin:$PATH
+export SRUN_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK}
+
+export OMP_NUM_THREADS=12
+export NEKRS_GPU_MPI="1"
+export OCCA_CXX="g++"
+export OCCA_CXXFLAGS="-O2 -ftree-vectorize -funroll-loops -march=native -mtune=native"
+
+
+srun $NEKRS_HOME/bin/nekrs --backend CUDA --device-id 0 --setup rbc

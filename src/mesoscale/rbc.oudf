@@ -1,0 +1,278 @@
+// Boundary conditions
+
+void scalarDirichletConditions(bcData *bc) {
+  bc->s = 1.f - bc->z; 
+}
+
+// Kernels
+
+@kernel void fillFU(const dlong Ntotal,
+                    const dlong offset,
+                    @restrict const dfloat *S,
+                    @restrict dfloat * FU) { 
+  for (dlong n=0;n<Ntotal;++n;@tile(p_blockSize,@outer,@inner)) {
+    if (n<Ntotal) {
+      FU[n + 0*offset] = 0.0;
+      FU[n + 1*offset] = 0.0;
+      FU[n + 2*offset] = S[n];
+    }
+  }
+}
+
+
+
+
+@kernel void avgValue(const dlong Nblocks,
+                      const dlong N,
+                      @restrict const  dfloat *  X,
+                      @restrict const  dfloat *  Y,
+                      @restrict const  dfloat *  Z,                      
+                      const dlong offset,
+                      @restrict dfloat * U,
+                      @restrict dfloat * T,
+                      @restrict dfloat *res) {
+                       
+                       
+  
+  for(dlong b=0;b<Nblocks;++b;@outer(0)){
+  
+    @shared volatile dfloat sum[3*p_blockSize];
+  
+ 
+    //add
+    for (int m = 0; m < p_blockSize; ++m; @inner(0)) {
+      sum[0*p_blockSize + m] = 0.0;
+      sum[1*p_blockSize + m] = 0.0;
+      sum[2*p_blockSize + m] = 0.0;
+      
+      const dlong n = m + b * p_blockSize;
+      if (n < N) {
+        // Parallel work
+        dfloat u, v, w;
+        u = U[n + 0*offset]; 
+        v = U[n + 1*offset]; 
+        w = U[n + 2*offset];
+        sum[0*p_blockSize + m] += u*u + v*v + w*w;
+        if (w >=0.0){
+          sum[1*p_blockSize + m] += w;
+        }
+        else{
+          sum[1*p_blockSize + m] += -1.0*w;
+        }
+        sum[2*p_blockSize + m] += 0.0;
+      }
+    }
+    
+    @barrier("local");
+    
+
+
+#if p_blockSize>512
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<512){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +512];
+      }}}
+    @barrier("local");
+#endif
+
+#if p_blockSize>256
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<256){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +256];
+      }}}
+    @barrier("local");
+#endif
+
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<128){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +128];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<64){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +64];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<32){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +32];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<16){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +16];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<8){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +8];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<4){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +4];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<2){
+       for(int i=0; i< 3; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +2];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<3){
+        res[m*Nblocks + b] = sum[m*p_blockSize + 0] + sum[m*p_blockSize + 1];
+      }}
+    @barrier("local");
+    
+    
+  }//end outer loop   
+}//end function
+  
+ 
+
+
+
+@kernel void varValue(const dlong Nblocks,
+                      const dlong N,
+                      @restrict const  dfloat *  X,
+                      @restrict const  dfloat *  Y,
+                      @restrict const  dfloat *  Z,                      
+                      const dlong offset,
+                      @restrict dfloat * U,
+                      @restrict dfloat * T,
+                      @restrict dfloat *res,
+                      const dfloat rms_mean,
+                      const dfloat v_z_mean) {
+                       
+                       
+  
+  for(dlong b=0;b<Nblocks;++b;@outer(0)){
+  
+    @shared volatile dfloat sum[2*p_blockSize];
+  
+ 
+    //add
+    for (int m = 0; m < p_blockSize; ++m; @inner(0)) {
+      sum[0*p_blockSize + m] = 0.0;
+      sum[1*p_blockSize + m] = 0.0;
+      
+      const dlong n = m + b * p_blockSize;
+      if (n < N) {
+        // Parallel work
+        dfloat u, v, w, temp;
+        u = U[n + 0*offset]; 
+        v = U[n + 1*offset]; 
+        w = U[n + 2*offset];
+        temp = (u*u + v*v + w*w) - rms_mean;
+        sum[0*p_blockSize + m] += temp * temp ;
+        
+        if (w >=0.0){
+          temp = w - v_z_mean;
+        }
+        else{
+          temp = -1.0*w - v_z_mean;
+        }
+        sum[1*p_blockSize + m] += temp * temp;
+      }
+    }
+    
+    @barrier("local");
+    
+
+
+#if p_blockSize>512
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<512){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +512];
+      }}}
+    @barrier("local");
+#endif
+
+#if p_blockSize>256
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<256){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +256];
+      }}}
+    @barrier("local");
+#endif
+
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<128){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +128];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<64){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +64];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<32){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +32];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<16){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +16];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<8){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +8];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<4){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +4];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<2){
+       for(int i=0; i< 2; i++){
+        sum[i*p_blockSize + m] += sum[i*p_blockSize + m +2];
+      }}}
+    @barrier("local");
+
+    for(int m=0;m<p_blockSize;++m;@inner(0)){
+      if(m<2){
+        res[m*Nblocks + b] = sum[m*p_blockSize + 0] + sum[m*p_blockSize + 1];
+      }}
+    @barrier("local");
+    
+    
+  }//end outer loop   
+}//end function
+  
+ 

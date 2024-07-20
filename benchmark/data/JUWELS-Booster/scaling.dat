@@ -1,0 +1,6 @@
+nodes,total_solve_time,verification_status
+1,252.82,Passed
+2,130.057,Passed
+4,69.696,Passed
+6,50.5857,Passed
+8,38.8217,Passed
